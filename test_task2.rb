@@ -1,46 +1,37 @@
-require 'watir'
+require 'mechanize'
 require 'ox'
+require 'json'
 
 
-browser = Watir::Browser.new(:firefox, headless: true)
-browser.goto("https://pm.healthcaresource.com/cs/chc#/search")
+agent = Mechanize.new
 
-browser.button(text: "Search").click
+request = {"query":{"bool":{"must":{"match_all":{}},"should":{"match":{"userArea.isFeaturedJob":{"query":true,"boost":1}}}}},"sort":{"title.raw":"asc"},"aggs":{"facility":{"terms":{"field":"userArea.bELevel1.raw","size":1000}},"occupationalCategory":{"terms":{"field":"occupationalCategory.raw","size":1000}},"employmentType":{"terms":{"field":"employmentType.raw","size":1000}}}}
 
-browser.wait_until { browser.h3.text != 'Search Current Openings' }
+page = agent.post(
+    'https://pm.healthcaresource.com/JobseekerSearchAPI/chc/api/Search?size=500',
+    request.to_json,
+    {'Content-Type' => 'application/json'}
+    )
 
-while browser.button(text: "Load More").exists?
-    browser.button(text: "Load More").click
-end
+content = page.body
+content = JSON.parse(content.gsub('=>', ':'))
 
-job_links = []
-
-browser.divs(class: "text-right").each do |div|
-    div.links.each { |link| job_links << link }
-end
+all = content["hits"]["hits"]
 
 
-jobs = job_links.map do |link|
+jobs = all.map do |elem|
 
-    link.click(:control)
-    browser.switch_window.use
-
-    req_num = browser.element(css: 'div.margin-top-none:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) > span:nth-child(1) > span:nth-child(2)').text
-    vacancy_title = browser.element(css: 'h3.simple > span:nth-child(1) > strong:nth-child(1) > span:nth-child(1)').text
-    vacancy_location = browser.element(css: 'div.field-column:nth-child(2)').text
-    vacancy_URL = browser.url
-    vacancy_id = vacancy_URL.split('/')[-1]
-    vacancy_text = browser.element(css: 'div.row:nth-child(11) > div:nth-child(1)').text rescue vacancy_text = "No job description"
-
-    browser.window.close
-    browser.original_window.use
+    vacancy_title = elem["_source"]["title"]
+    vacancy_location = elem["_source"]["jobLocation"]["address"]["addressLocalityRegion"]
+    vacancy_URL = "https://pm.healthcaresource.com/cs/chc#/job/" + elem["_source"]["userArea"]["jobPostingID"].to_s
+    vacancy_id = elem["_source"]["userArea"]["jobPostingID"]
+    vacancy_text = elem["_source"]["userArea"]["jobSummary"]
 
     {
         vacancy_id: vacancy_id,
         vacancy_title: vacancy_title,
         vacancy_URL: vacancy_URL,
         vacancy_location: vacancy_location,
-        req_number: req_num,
         vacancy_text: vacancy_text
     }
 
@@ -76,19 +67,15 @@ jobs.each do |hash|
     job << url
 
     id = Ox::Element.new('job_reference')
-    id << hash[:vacancy_id]
+    id << hash[:vacancy_id].to_s
     job << id
 
     location = Ox::Element.new('location')
     location << hash[:vacancy_location]
     job << location
 
-    req = Ox::Element.new('req_number')
-    req << hash[:req_number]
-    job << req
-
     body = Ox::Element.new('body')
-    body << hash[:vacancy_text]
+    body << hash[:vacancy_text].to_s
     job << body
     
 end
@@ -100,3 +87,4 @@ xml = Ox.dump(doc)
 file = File.new("./test2.xml", "a:ASCII-8BIT")
 file.print(xml)
 file.close
+
